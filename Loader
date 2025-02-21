@@ -1,0 +1,78 @@
+#include <Windows.h>
+#include <TlHelp32.h>
+#include <iostream>
+
+// Fonction pour trouver le processus cible par son nom
+DWORD trouveProcessusParNom(const char* nomProcessus) {
+    DWORD pid = 0;
+    HANDLE hSnapShot = CreateToolhelp32Snapshot(TH32CS_SNAPALL, NULL);
+    if (hSnapShot) {
+        PROCESSENTRY32 pEntry;
+        pEntry.dwSize = sizeof(pEntry);
+        if (Process32First(hSnapShot, &pEntry)) {
+            do {
+                if (!_stricmp(pEntry.szExeFile, nomProcessus)) {
+                    pid = pEntry.th32ProcessID;
+                    break;
+                }
+            } while (Process32Next(hSnapShot, &pEntry));
+        }
+        CloseHandle(hSnapShot);
+    }
+    return pid;
+}
+
+int main() {
+    const char* nomProcessusCible = "nom_de_votre_processus_cible.exe"; // Remplacez par le nom du processus cible
+    const char* cheminDll = "C:\\chemin\\vers\\votre\\dll.dll"; // Remplacez par le chemin de votre DLL
+
+    // Trouver le processus cible
+    DWORD pidCible = trouveProcessusParNom(nomProcessusCible);
+    if (!pidCible) {
+        std::cout << "Processus non trouvé." << std::endl;
+        return 1;
+    }
+
+    // Obtenir une handle du processus
+    HANDLE hProcess = OpenProcess(PROCESS_ALL_ACCESS, FALSE, pidCible);
+    if (!hProcess) {
+        std::cout << "Impossible d'ouvrir le processus. Erreur : " << GetLastError() << std::endl;
+        return 1;
+    }
+
+    // Allouer de l'espace mémoire pour le chemin de la DLL
+    LPVOID alloMem = VirtualAllocEx(hProcess, NULL, strlen(cheminDll) + 1, MEM_COMMIT, PAGE_READWRITE);
+    if (!alloMem) {
+        std::cout << "Erreur d'allocation de mémoire. Erreur : " << GetLastError() << std::endl;
+        CloseHandle(hProcess);
+        return 1;
+    }
+
+    // Écrire le chemin de la DLL dans l'espace mémoire alloué
+    if (!WriteProcessMemory(hProcess, alloMem, cheminDll, strlen(cheminDll) + 1, NULL)) {
+        std::cout << "Erreur d'écriture dans le processus. Erreur : " << GetLastError() << std::endl;
+        VirtualFreeEx(hProcess, alloMem, 0, MEM_RELEASE);
+        CloseHandle(hProcess);
+        return 1;
+    }
+
+    // Charger la DLL via CreateRemoteThread
+    HANDLE hThread = CreateRemoteThread(hProcess, NULL, 0, (LPTHREAD_START_ROUTINE)LoadLibraryA, alloMem, 0, NULL);
+    if (!hThread) {
+        std::cout << "Impossible de créer le thread distant. Erreur : " << GetLastError() << std::endl;
+        VirtualFreeEx(hProcess, alloMem, 0, MEM_RELEASE);
+        CloseHandle(hProcess);
+        return 1;
+    }
+
+    // Attendre la fin du thread (facultatif, selon vos besoins)
+    WaitForSingleObject(hThread, INFINITE);
+    CloseHandle(hThread);
+
+    // Libérer les ressources
+    VirtualFreeEx(hProcess, alloMem, 0, MEM_RELEASE);
+    CloseHandle(hProcess);
+
+    std::cout << "DLL injectée avec succès." << std::endl;
+    return 0;
+}
